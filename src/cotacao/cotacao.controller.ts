@@ -31,7 +31,7 @@ export class CotacaoController {
   }
 
   @Post('save-item')
-  async saveItem(@Body() body: { apiData: any; userInput: { codFornecedor?: number; nomeFornecedor?: string; precoUnit?: number; projeto?: string; tag?: string; usuarioCotacao: string } }) {
+  async saveItem(@Body() body: { apiData: any; userInput: { codFornecedor?: number; nomeFornecedor?: string; precoUnit?: number; projeto?: string; tag?: string; situacao?: number; usuarioCotacao: string } }) {
     return this.cotacaoService.saveItem(body.apiData, body.userInput);
   }
 }

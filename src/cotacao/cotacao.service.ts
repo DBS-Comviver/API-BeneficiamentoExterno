@@ -16,13 +16,13 @@ export class CotacaoService {
     private configService: ConfigService,
   ) {}
 
-  private getApiBaseUrl() {
-    return this.configService.get('EXTERNAL_API_BASE_URL');
+  private getApiBaseUrl(): string {
+    return this.configService.get<string>('EXTERNAL_API_BASE_URL') || '';
   }
 
   private getAuthHeader(): string {
-    const user = this.configService.get('EXTERNAL_API_USER');
-    const pass = this.configService.get('EXTERNAL_API_PASSWORD');
+    const user = this.configService.get<string>('EXTERNAL_API_USER');
+    const pass = this.configService.get<string>('EXTERNAL_API_PASSWORD');
     return 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
   }
 
@@ -54,12 +54,25 @@ export class CotacaoService {
   }
 
   async getSavedItems(filters: { encomenda?: string; oc?: string; op?: string }): Promise<ItemBe[]> {
-    const where: any = {};
-    if (filters.encomenda) where.encomenda = filters.encomenda;
-    if (filters.oc) where.numeroOrdem = parseInt(filters.oc);
-    if (filters.op) where.nrOrdProd = parseInt(filters.op);
-
     try {
+      const where: any = {};
+      
+      if (filters.encomenda) {
+        where.encomenda = filters.encomenda;
+      }
+      if (filters.oc) {
+        const ocNum = parseInt(filters.oc, 10);
+        if (!isNaN(ocNum)) {
+          where.numeroOrdem = ocNum;
+        }
+      }
+      if (filters.op) {
+        const opNum = parseInt(filters.op, 10);
+        if (!isNaN(opNum)) {
+          where.nrOrdProd = opNum;
+        }
+      }
+
       return await this.itemBeRepository.find({ where });
     } catch (error) {
       console.error('Erro ao buscar itens salvos:', error);
@@ -92,54 +105,83 @@ export class CotacaoService {
     }
   }
 
-  async saveItem(dataFromApi: any, userInput: { codFornecedor?: number; nomeFornecedor?: string; precoUnit?: number; projeto?: string; tag?: string; usuarioCotacao: string }): Promise<ItemBe> {
+  async saveItem(dataFromApi: any, userInput: { 
+    codFornecedor?: number; 
+    nomeFornecedor?: string; 
+    precoUnit?: number; 
+    projeto?: string; 
+    tag?: string; 
+    situacao?: number; 
+    usuarioCotacao: string 
+  }): Promise<ItemBe> {
+
     let precoTotal: number | null = null;
-    if (userInput.precoUnit !== undefined && dataFromApi.qtd_item !== undefined) {
-      precoTotal = userInput.precoUnit * dataFromApi.qtd_item;
+    if (userInput.precoUnit != null && dataFromApi.qtd_item != null) {
+      const qtd = typeof dataFromApi.qtd_item === 'string' ? parseFloat(dataFromApi.qtd_item) : dataFromApi.qtd_item;
+      precoTotal = userInput.precoUnit * qtd;
     }
 
-    if (
-      !userInput.codFornecedor &&
-      userInput.precoUnit === undefined &&
-      !userInput.projeto &&
-      !userInput.tag
-    ) {
-      throw new Error('Pelo menos um dos seguintes deve ser fornecido: Fornecedor, Preço unitário, Projeto ou Tag.');
+    const hasAtLeastOneField = 
+      userInput.codFornecedor != null ||
+      userInput.precoUnit != null ||
+      userInput.projeto != null ||
+      userInput.tag != null ||
+      userInput.situacao != null;
+
+    if (!hasAtLeastOneField) {
+      throw new Error('Pelo menos um dos seguintes deve ser fornecido: Fornecedor, Preço unitário, Projeto, Tag ou Situação.');
     }
 
     const itemData: Partial<ItemBe> = {
-      nrOrdProd: dataFromApi.nr_ord_produ,
-      numeroOrdem: dataFromApi.numero_ordem,
-      itCodigo: dataFromApi.it_codigo,
-      descItem: dataFromApi.desc_item,
-      encomenda: dataFromApi.encomenda,
-      codCliente: dataFromApi.cod_cliente,
-      nomeCliente: dataFromApi.nome_cliente,
-      qtdItem: dataFromApi.qtd_item,
-      situacao: dataFromApi.situacao || 1,
-      codFornecedor: userInput.codFornecedor,
-      nomeFornecedor: userInput.nomeFornecedor,
-      precoUnit: userInput.precoUnit,
+      nrOrdProd: dataFromApi.nr_ord_produ ?? null,
+      numeroOrdem: dataFromApi.numero_ordem ?? null,
+      itCodigo: dataFromApi.it_codigo ?? null,
+      descItem: dataFromApi.desc_item ?? null,
+      encomenda: dataFromApi.encomenda ?? null,
+      codCliente: dataFromApi.cod_cliente ?? null,
+      nomeCliente: dataFromApi.nome_cliente ?? null,
+      qtdItem: dataFromApi.qtd_item ? parseFloat(dataFromApi.qtd_item.toString()) : null,
+      codFornecedor: userInput.codFornecedor ?? null,
+      nomeFornecedor: userInput.nomeFornecedor ?? null,
+      precoUnit: userInput.precoUnit ?? null,
       precoTotal,
-      projeto: userInput.projeto,
-      tag: userInput.tag,
+      projeto: userInput.projeto ?? null,
+      tag: userInput.tag ?? null,
       dataCotacao: new Date(),
       usuarioCotacao: userInput.usuarioCotacao,
+      situacao: userInput.situacao ?? dataFromApi.situacao ?? 1,
     };
 
     const existing = await this.itemBeRepository.findOne({
       where: {
-        nrOrdProd: dataFromApi.nr_ord_produ,
-        numeroOrdem: dataFromApi.numero_ordem,
-        encomenda: dataFromApi.encomenda,
+        nrOrdProd: dataFromApi.nr_ord_produ ?? null,
+        numeroOrdem: dataFromApi.numero_ordem ?? null,
+        encomenda: dataFromApi.encomenda ?? null,
+        itCodigo: dataFromApi.it_codigo ?? null,  
       },
     });
 
     let savedItem: ItemBe;
+    
     if (existing) {
-      savedItem = await this.itemBeRepository.save({ ...existing, ...itemData });
+      const updateData = { ...existing };
+      
+      if (userInput.codFornecedor != null) updateData.codFornecedor = userInput.codFornecedor;
+      if (userInput.nomeFornecedor != null) updateData.nomeFornecedor = userInput.nomeFornecedor;
+      if (userInput.precoUnit != null) {
+        updateData.precoUnit = userInput.precoUnit;
+        updateData.precoTotal = precoTotal;
+      }
+      if (userInput.projeto != null) updateData.projeto = userInput.projeto;
+      if (userInput.tag != null) updateData.tag = userInput.tag;
+      if (userInput.situacao != null) updateData.situacao = userInput.situacao;
+      
+      updateData.dataCotacao = new Date();
+      updateData.usuarioCotacao = userInput.usuarioCotacao;
+
+      savedItem = await this.itemBeRepository.save(updateData);
     } else {
-      savedItem = await this.itemBeRepository.save(itemData);
+      savedItem = await this.itemBeRepository.save(this.itemBeRepository.create(itemData));
     }
 
     if (!savedItem) {
