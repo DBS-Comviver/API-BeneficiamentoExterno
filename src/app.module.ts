@@ -6,6 +6,8 @@ import { CotacaoModule } from './cotacao/cotacao.module';
 import { ExpedicaoModule } from './expedicao/expedicao.module';
 import { ItemBe } from './entities/item-be.entity';
 import { ItemBeReserva } from './entities/item-be-reservas';
+import { SolicitacaoNFModule } from './solicitacao-nf/solicitacao-nf.module';
+import { SolicitacaoNF } from './entities/solicitacao-nf'; 
 
 @Module({
   imports: [
@@ -23,13 +25,14 @@ import { ItemBeReserva } from './entities/item-be-reservas';
         username: configService.get<string>('DATABASE_USER'),
         password: configService.get<string>('DATABASE_PASSWORD'),
         database: configService.get<string>('DATABASE_NAME'),
-        entities: [ItemBe, ItemBeReserva],
+        entities: [ItemBe, ItemBeReserva, SolicitacaoNF], 
         synchronize: false
       }),
     }),
     HttpModule,
     CotacaoModule,
     ExpedicaoModule,
+    SolicitacaoNFModule,
   ],
 })
 export class AppModule {}
