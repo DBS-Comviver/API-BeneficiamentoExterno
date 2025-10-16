@@ -1,4 +1,5 @@
-import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, OneToMany } from 'typeorm';
+import { ItemBeReserva } from './item-be-reservas';
 
 @Entity('dbs_be_solicitacoes_nf')
 export class SolicitacaoNF {
@@ -13,4 +14,7 @@ export class SolicitacaoNF {
 
   @Column({ name: 'usuario_solicitacao', type: 'varchar', length: 45 })
   usuarioSolicitacao!: string;
+
+  @OneToMany(() => ItemBeReserva, (reserva) => reserva.solicitacao)
+  reservas!: ItemBeReserva[];
 }

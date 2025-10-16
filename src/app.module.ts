@@ -8,6 +8,7 @@ import { ItemBe } from './entities/item-be.entity';
 import { ItemBeReserva } from './entities/item-be-reservas';
 import { SolicitacaoNFModule } from './solicitacao-nf/solicitacao-nf.module';
 import { SolicitacaoNF } from './entities/solicitacao-nf'; 
+import { EmissaoNFModule } from './emissao-nf/emissao-nf.module';
 
 @Module({
   imports: [
@@ -33,6 +34,7 @@ import { SolicitacaoNF } from './entities/solicitacao-nf';
     CotacaoModule,
     ExpedicaoModule,
     SolicitacaoNFModule,
+    EmissaoNFModule,
   ],
 })
 export class AppModule {}

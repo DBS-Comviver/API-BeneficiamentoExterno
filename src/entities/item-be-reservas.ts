@@ -1,4 +1,5 @@
-import { Entity, PrimaryGeneratedColumn, Column } from 'typeorm';
+import { Entity, PrimaryGeneratedColumn, Column, ManyToOne, JoinColumn } from 'typeorm';
+import { SolicitacaoNF } from './solicitacao-nf';
 
 @Entity('dbs_be_itens_reservas')
 export class ItemBeReserva {
@@ -189,4 +190,8 @@ export class ItemBeReserva {
 
   @Column({ name: 'cod_item_be', type: 'int', nullable: true })
   codItemBe!: number | null;
+
+  @ManyToOne(() => SolicitacaoNF, (solicitacao) => solicitacao.reservas)
+  @JoinColumn({ name: 'cod_solicitacao' })
+  solicitacao!: SolicitacaoNF;
 }
