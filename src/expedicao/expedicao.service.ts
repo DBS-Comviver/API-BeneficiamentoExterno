@@ -44,6 +44,22 @@ export class ExpedicaoService {
     return 'Basic ' + Buffer.from(`${user}:${pass}`).toString('base64');
   }
 
+  async checkExistingItems(filters: { encomenda?: string; oc?: string; op?: string }): Promise<boolean> {
+    const where: any = {};
+    if (filters.encomenda) where.encomenda = filters.encomenda;
+    if (filters.op) {
+      const opNum = parseInt(filters.op, 10);
+      if (!isNaN(opNum)) where.nrOrdProd = opNum;
+    }
+    if (filters.oc) {
+      const ocNum = parseInt(filters.oc, 10);
+      if (!isNaN(ocNum)) where.numeroOrdem = ocNum;
+    }
+
+    const existing = await this.itemBeRepository.findOne({ where });
+    return !!existing;
+  }
+
   async fetchItems(filters: { encomenda?: string; oc?: string; op?: string }): Promise<any[]> {
     const params = new URLSearchParams({
       tipo: '2',
@@ -97,7 +113,7 @@ export class ExpedicaoService {
 
   async getLiberatedItems(filters: { encomenda?: string; oc?: string; op?: string }): Promise<ItemBe[]> {
     try {
-      const where: any = { situacao: 2 };
+      const where: any = { situacao: 2 }; 
       if (filters.encomenda) where.encomenda = filters.encomenda;
       if (filters.oc) {
         const ocNum = parseInt(filters.oc, 10);
@@ -159,6 +175,11 @@ export class ExpedicaoService {
 
     const now = new Date();
 
+    let situacaoFinal = userInput.situacao ?? existing?.situacao ?? dataFromApi.situacao ?? 1;
+    if (userInput.situacao === 2) {
+      situacaoFinal = 2;
+    }
+
     const reservaData: Partial<ItemBeReserva> = {
       nrOrdProd: dataFromApi.nr_ord_produ,
       numeroOrdem: dataFromApi.numero_ordem,
@@ -179,7 +200,7 @@ export class ExpedicaoService {
       precoUnitario: itemBe.precoUnit,
       precoTotal: itemBe.precoTotal,
       codItemBe: itemBe.codItemBe,
-      situacao: userInput.situacao ?? existing?.situacao ?? dataFromApi.situacao ?? 1,
+      situacao: situacaoFinal, 
     };
 
     if (userInput.qtdForn != null) {
@@ -199,6 +220,16 @@ export class ExpedicaoService {
       if (userInput.situacao === 2) {
         reservaData.dataExpedicao = now;
         reservaData.usuarioExpedicao = userInput.usuario;
+        
+        try {
+          await this.itemBeRepository.update(
+            { codItemBe: itemBe.codItemBe },
+            { situacao: 2 }
+          );
+          this.logger.log(`ItemBe ${itemBe.codItemBe} atualizado para situação 2 (Expedido)`);
+        } catch (updateError) {
+          this.logger.error(`Erro ao atualizar situação do ItemBe: ${updateError.message}`);
+        }
       }
     }
 
@@ -207,10 +238,13 @@ export class ExpedicaoService {
       if (existing) {
         this.logger.log('Atualizando reserva existente');
         const updateData = { ...existing, ...reservaData };
+        
+
         if (userInput.qtdForn != null) {
           updateData.qtdForn = userInput.qtdForn;
           updateData.usuarioInsercao = userInput.usuario;
         }
+        
         if (userInput.situacao != null) {
           updateData.situacao = userInput.situacao;
           if (userInput.situacao === 2) {
@@ -218,12 +252,14 @@ export class ExpedicaoService {
             updateData.usuarioExpedicao = userInput.usuario;
           }
         }
+        
         updateData.codFornecedor = itemBe.codFornecedor;
         updateData.nomeFornecedor = itemBe.nomeFornecedor;
         updateData.projeto = itemBe.projeto;
         updateData.tag = itemBe.tag;
         updateData.precoUnitario = itemBe.precoUnit;
         updateData.precoTotal = itemBe.precoTotal;
+        
         savedReserva = await this.itemBeReservaRepository.save(updateData);
       } else {
         this.logger.log('Criando nova reserva');
@@ -232,6 +268,7 @@ export class ExpedicaoService {
         reservaData.pesoBruto = dataFromApi.peso_bruto ? parseFloat(dataFromApi.peso_bruto.toString()) : null;
         reservaData.dataInsercao = now;
         reservaData.usuarioInsercao = userInput.usuario;
+        
         savedReserva = await this.itemBeReservaRepository.save(this.itemBeReservaRepository.create(reservaData));
       }
     } catch (error) {
@@ -243,6 +280,7 @@ export class ExpedicaoService {
       throw new InternalServerErrorException('Falha ao salvar a reserva');
     }
 
+    this.logger.log(`Reserva salva com sucesso: codItemReserva=${savedReserva.codItemReserva}, situacao=${savedReserva.situacao}`);
     return savedReserva;
   }
 }
