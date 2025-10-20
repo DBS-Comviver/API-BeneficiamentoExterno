@@ -9,6 +9,7 @@ import { ItemBeReserva } from './entities/item-be-reservas';
 import { SolicitacaoNFModule } from './solicitacao-nf/solicitacao-nf.module';
 import { SolicitacaoNF } from './entities/solicitacao-nf'; 
 import { EmissaoNFModule } from './emissao-nf/emissao-nf.module';
+import { OrdensProducaoExternasModule } from './ordens-producao-externas/ordens-producao-externas.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { EmissaoNFModule } from './emissao-nf/emissao-nf.module';
     ExpedicaoModule,
     SolicitacaoNFModule,
     EmissaoNFModule,
+    OrdensProducaoExternasModule,
   ],
 })
 export class AppModule {}

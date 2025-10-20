@@ -10,6 +10,12 @@ import { lastValueFrom } from 'rxjs';
 import { AxiosRequestConfig } from 'axios';
 import { ItemEmissaoNF, SolicitacaoAguardando, RespostaEmissaoNF } from './emissao-nf.types';
 
+interface DatasulResponse {
+  numeroNF?: string;
+  success: boolean;
+  message?: string;
+}
+
 @Injectable()
 export class EmissaoNFService {
   private readonly logger = new Logger(EmissaoNFService.name);
@@ -39,32 +45,31 @@ export class EmissaoNFService {
     try {
       this.logger.log('Buscando itens aguardando emissão de NF');
 
-        let query = this.itemBeReservaRepository
+      let query = this.itemBeReservaRepository
         .createQueryBuilder('reserva')
         .leftJoinAndSelect('reserva.solicitacao', 'solicitacao') 
         .select([
-            'solicitacao.codSolicitacao as codSolicitacao',
-            'reserva.nrOrdProd as op',
-            'reserva.numeroOrdem as oc',
-            'reserva.situacao as situacao',
-            'reserva.encomenda as encomenda',
-            'reserva.itCodigo as codItem',
-            'reserva.descItem as descItem',
-            'reserva.itReserva as codReserva',
-            'reserva.descReserva as descReserva',
-            'reserva.codFornecedor as codFornecedor',
-            'reserva.nomeFornecedor as nomeFornecedor',
-            'reserva.qtdForn as quantidade',
-            'reserva.pesoLiquido as pesoLiquido',
-            'reserva.pesoBruto as pesoBruto',
-            'reserva.codItemReserva as codItemReserva',
-            'solicitacao.dataSolicitacao as dataSolicitacao'
+          'solicitacao.codSolicitacao as codSolicitacao',
+          'reserva.nrOrdProd as op',
+          'reserva.numeroOrdem as oc',
+          'reserva.situacao as situacao',
+          'reserva.encomenda as encomenda',
+          'reserva.itCodigo as codItem',
+          'reserva.descItem as descItem',
+          'reserva.itReserva as codReserva',
+          'reserva.descReserva as descReserva',
+          'reserva.codFornecedor as codFornecedor',
+          'reserva.nomeFornecedor as nomeFornecedor',
+          'reserva.qtdForn as quantidade',
+          'reserva.pesoLiquido as pesoLiquido',
+          'reserva.pesoBruto as pesoBruto',
+          'reserva.codItemReserva as codItemReserva',
+          'solicitacao.dataSolicitacao as dataSolicitacao'
         ])
         .where('reserva.dataExpedicao IS NOT NULL') 
         .andWhere('reserva.codSolicitacao IS NOT NULL') 
-        .andWhere('reserva.dataEmissaoNf IS NULL');
-
-        query = query.andWhere('solicitacao.situacao = :situacao', { situacao: 1 });
+        .andWhere('reserva.dataEmissaoNf IS NULL')
+        .andWhere('(reserva.situacao = 4 OR reserva.situacao = 3)'); 
 
       if (filters.encomenda) {
         query = query.andWhere('reserva.encomenda = :encomenda', { encomenda: filters.encomenda });
@@ -107,7 +112,7 @@ export class EmissaoNFService {
         pesoBruto: item.pesoBruto,
         codItemReserva: item.codItemReserva,
         dataSolicitacao: item.dataSolicitacao
-    }));
+      }));
 
     } catch (error) {
       this.logger.error('Erro ao buscar itens aguardando emissão:', error);
@@ -149,11 +154,18 @@ export class EmissaoNFService {
   }
 
   async emitirNotaFiscal(itens: { codItemReserva: number }[], usuario: string, codSolicitacao: number): Promise<RespostaEmissaoNF> {
+    const connection = this.itemBeReservaRepository.manager.connection;
+    const queryRunner = connection.createQueryRunner();
+    
+    await queryRunner.connect();
+    await queryRunner.startTransaction();
+
     try {
       this.logger.log(`Iniciando emissão de NF para solicitação ${codSolicitacao}, ${itens.length} itens`);
 
+      const itensCompletos = [];
       for (const item of itens) {
-        const reserva = await this.itemBeReservaRepository.findOne({
+        const reserva = await queryRunner.manager.findOne(ItemBeReserva, {
           where: { 
             codItemReserva: item.codItemReserva,
             codSolicitacao: codSolicitacao,
@@ -165,53 +177,77 @@ export class EmissaoNFService {
         if (!reserva) {
           throw new Error(`Item ${item.codItemReserva} não encontrado ou não está apto para emissão`);
         }
+
+        itensCompletos.push(reserva);
       }
 
-      // pendente : emissão da NF 
-      this.logger.log('Simulando integração com API do Datasul...');
-      const numeroNF = this.gerarNumeroNFFicticio();
-      
-      this.logger.log(`NF ${numeroNF} gerada com sucesso (simulação)`);
+      const fornecedores = [...new Set(itensCompletos.map(item => item.codFornecedor))];
+      if (fornecedores.length > 1) {
+        throw new Error('Todos os itens devem ser do mesmo fornecedor para emissão da NF');
+      }
+
+      const codFornecedor = fornecedores[0];
+      if (!codFornecedor) {
+        throw new Error('Fornecedor não identificado para os itens selecionados');
+      }
+
+      const itensParaEnvio = itensCompletos.map(item => {
+        const quantidade = item.qtdForn ? parseFloat(item.qtdForn.toString()).toFixed(5) : '0.00000';
+        const valorUnitario = item.precoUnitario ? parseFloat(item.precoUnitario.toString()).toFixed(5) : '0.00000';
+        
+        return `${item.itCodigo},${quantidade},${valorUnitario}`;
+      });
+
+      const parametrosItens = itensParaEnvio.join(';');
+
+
+      this.logger.log(`Enviando ${itensCompletos.length} itens para API do Datasul`);
+      const resultadoAPI = await this.chamarAPIDatasul(codFornecedor, parametrosItens);
+
+      if (!resultadoAPI.success || !resultadoAPI.numeroNF) {
+        throw new Error(`Falha na emissão da NF: ${resultadoAPI.message || 'Erro desconhecido'}`);
+      }
+
+      const numeroNF = resultadoAPI.numeroNF;
+      this.logger.log(`NF ${numeroNF} gerada com sucesso no Datasul`);
+
+
       let itensProcessados = 0;
       const now = new Date();
 
-      for (const item of itens) {
-        const updateResult = await this.itemBeReservaRepository.update(
+      for (const item of itensCompletos) {
+        await queryRunner.manager.update(
+          ItemBeReserva,
           { codItemReserva: item.codItemReserva },
           { 
             dataEmissaoNf: now,
             usuarioEmissaoNf: usuario,
             numeroNf: numeroNF,
-            situacao: 4 
+            situacao: 5 
           }
         );
 
-        if (updateResult.affected && updateResult.affected > 0) {
-          itensProcessados++;
-          
-          try {
-            const reserva = await this.itemBeReservaRepository.findOne({
-              where: { codItemReserva: item.codItemReserva }
-            });
-            
-            if (reserva && reserva.codItemBe) {
-              await this.itemBeRepository.update(
-                { codItemBe: reserva.codItemBe },
-                { situacao: 4 } 
-              );
-              this.logger.log(`ItemBe ${reserva.codItemBe} atualizado para situação 4 (NF Emitida)`);
-            }
-          } catch (itemBeError) {
-            this.logger.warn(`Não foi possível atualizar ItemBe para reserva ${item.codItemReserva}:`, itemBeError);
-          }
+        itensProcessados++;
+        
+
+        if (item.codItemBe) {
+          await queryRunner.manager.update(
+            ItemBe,
+            { codItemBe: item.codItemBe },
+            { situacao: 5 }
+          );
+          this.logger.log(`ItemBe ${item.codItemBe} atualizado para situação 5 (NF Emitida)`);
         }
       }
 
 
-      await this.solicitacaoNFRepository.update(
+      await queryRunner.manager.update(
+        SolicitacaoNF,
         { codSolicitacao },
-        { situacao: 2 } 
+        { situacao: 2 }
       );
+
+      await queryRunner.commitTransaction();
 
       this.logger.log(`Emissão de NF concluída: ${itensProcessados} itens processados, NF ${numeroNF}`);
 
@@ -223,20 +259,99 @@ export class EmissaoNFService {
       };
 
     } catch (error) {
+      await queryRunner.rollbackTransaction();
       this.logger.error('Erro ao emitir nota fiscal:', error);
       throw new InternalServerErrorException(`Erro ao emitir nota fiscal: ${error.message}`);
+    } finally {
+      await queryRunner.release();
     }
   }
 
-  private gerarNumeroNFFicticio(): string {
-    return Math.floor(100000000 + Math.random() * 900000000).toString();
-  }
+  private async chamarAPIDatasul(codFornecedor: number, parametrosItens: string): Promise<DatasulResponse> {
+    try {
+      const baseUrl = this.getApiBaseUrl();
+      const authHeader = this.getAuthHeader();
 
+      const url = `${baseUrl}/rest_cp12200_v10`;
+      
+      const params = {
+        tipo: '5',
+        cod_estabel: '15',
+        cod_emitente: codFornecedor.toString(),
+        itens: parametrosItens
+      };
 
-  private async enviarParaDatasul(itens: any[]): Promise<{ numeroNF: string; success: boolean }> {
-    return {
-      numeroNF: this.gerarNumeroNFFicticio(),
-      success: true
-    };
+      const config: AxiosRequestConfig = {
+        headers: {
+          'Authorization': authHeader,
+          'Content-Type': 'application/json'
+        },
+        params,
+        timeout: 30000 
+      };
+
+      this.logger.log(`Chamando API Datasul: ${url}`);
+      this.logger.log(`Parâmetros: ${JSON.stringify(params)}`);
+
+      const response = await lastValueFrom(
+        this.httpService.get(url, config)
+      );
+
+      this.logger.log(`Resposta da API Datasul: ${JSON.stringify(response.data)}`);
+
+      if (response.data && response.data.numeroNF) {
+        return {
+          numeroNF: response.data.numeroNF,
+          success: true
+        };
+      } else if (response.data && response.data.NF) {
+        return {
+          numeroNF: response.data.NF,
+          success: true
+        };
+      } else {
+        const responseData = response.data;
+        let numeroNF: string | undefined;
+
+        if (typeof responseData === 'string' && responseData.includes('NF')) {
+          const match = responseData.match(/NF[:\s]*(\d+)/i);
+          numeroNF = match ? match[1] : undefined;
+        } else if (responseData.numero) {
+          numeroNF = responseData.numero;
+        } else if (responseData.nf) {
+          numeroNF = responseData.nf;
+        }
+
+        if (numeroNF) {
+          return {
+            numeroNF,
+            success: true
+          };
+        } else {
+          return {
+            success: false,
+            message: 'Número da NF não encontrado na resposta da API'
+          };
+        }
+      }
+
+    } catch (error: any) {
+      this.logger.error('Erro na chamada à API do Datasul:', error);
+      
+      let errorMessage = 'Erro na comunicação com o sistema de emissão de NF';
+      
+      if (error.response) {
+        errorMessage = `Erro ${error.response.status}: ${error.response.data || error.response.statusText}`;
+      } else if (error.code === 'ECONNREFUSED') {
+        errorMessage = 'Conexão recusada com o servidor do Datasul';
+      } else if (error.code === 'ETIMEDOUT') {
+        errorMessage = 'Timeout na comunicação com o Datasul';
+      }
+
+      return {
+        success: false,
+        message: errorMessage
+      };
+    }
   }
 }
